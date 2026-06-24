@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python $HOME/.claude/hooks/permission_bubble.py --daemon",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:23333/permission",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python $HOME/.claude/hooks/permission_cleanup.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python $HOME/.claude/hooks/permission_cleanup.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
