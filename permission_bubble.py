@@ -250,36 +250,36 @@ class BubbleController:
 
         body_wrap = CARD_W - CARD_HPAD * 2 - 12 * 2
 
+        # relayout：测量 content 真实高度并定位右下角。elicitation 的 Other 展开/
+        # 问题切换会改变内容高度，需重新调用。content.winfo_reqheight() 不含自身
+        # pady（上下各16=32），补上避免按钮贴底被裁。
+        def relayout():
+            content.pack_propagate(True)
+            top.update_idletasks()
+            h = content.winfo_reqheight() + CARD_PAD * 2
+            if h < 50:
+                top.geometry(f"{CARD_W}x{400}+0+0")
+                top.update_idletasks()
+                h = content.winfo_reqheight() + CARD_PAD * 2
+            sw = top.winfo_screenwidth()
+            sh = top.winfo_screenheight()
+            top.geometry(f"{CARD_W}x{h}+{sw - CARD_W - 20}+{sh - h - 60}")
+            content.pack_propagate(False)
+            content.configure(width=CARD_W)
+            top.update_idletasks()
+            apply_rounded_corners(top)
+
         if is_elicitation:
             deny_btn, allow_btn = self._build_elicitation(
-                content, theme, req_id, tool_input, body_wrap)
+                content, theme, req_id, tool_input, body_wrap, relayout)
         else:
             deny_btn, allow_btn = self._build_permission(
                 content, theme, req_id, tool_input, body_wrap)
 
-        # ── 测量尺寸 → 固定宽度 CARD_W，高度取内容真实高度 → 定位右下角 ──
-        # 先让按钮重绘一次（确保 Canvas 按钮的 reqheight 被正确计入），
-        # 再 update_idletasks 让布局生效，最后读 content 真实需求高度。
+        # 首次测量：先让按钮重绘一次（确保 Canvas 按钮的 reqheight 被正确计入）
         deny_btn.redraw()
         allow_btn.redraw()
-        content.pack_propagate(True)   # 临时开启传播，让 reqheight 反映子部件真实高度
-        top.update_idletasks()
-        w = CARD_W
-        # content.winfo_reqheight() 不含自身 pady（上下各16=32），补上避免按钮贴底被裁
-        h = content.winfo_reqheight() + CARD_PAD * 2
-        # 兜底：reqheight 异常小时（Canvas 子部件未就绪），用实际渲染高度
-        if h < 50:
-            top.geometry(f"{w}x{400}+0+0")
-            top.update_idletasks()
-            h = content.winfo_reqheight() + CARD_PAD * 2
-        sw = top.winfo_screenwidth()
-        sh = top.winfo_screenheight()
-        top.geometry(f"{w}x{h}+{sw - w - 20}+{sh - h - 60}")
-        # 锁定宽度，防止后续 update 时子部件重新撑宽
-        content.pack_propagate(False)
-        content.configure(width=w)
-        top.update_idletasks()
-        apply_rounded_corners(top)
+        relayout()
         deny_btn.redraw()
         allow_btn.redraw()
 
@@ -337,29 +337,34 @@ class BubbleController:
             cmd_pady = (0, 10)
         else:
             cmd_pady = (10, 10)
-        # 命令在下（等宽、单行像素截断省略，不换行撑高卡片）
+        # 命令在下（等宽、可滚动，对照 Clawd：max-height + overflow-y:auto）
+        # 用 Text + Scrollbar：短命令自适应高度，长命令限高 5 行滚动，不截断
         cmd_font = ("Cascadia Code", 10)
-        avail = wrap  # 可用像素宽度
-        cmd_label = tk.Label(cmd_frame, text=cmd, fg=theme["cmd_color"], bg=theme["cmd_bg"],
-                             font=cmd_font, justify="left", anchor="w")
-        # 按像素宽度截断：超长则从尾部减，加 …
+        cmd_box = tk.Frame(cmd_frame, bg=theme["cmd_bg"])
+        cmd_box.pack(fill="x", padx=12, pady=cmd_pady)
+        cmd_text = tk.Text(cmd_box, bg=theme["cmd_bg"], fg=theme["cmd_color"],
+                           font=cmd_font, wrap="word", relief="flat", bd=0,
+                           highlightthickness=0, padx=0, pady=0,
+                           height=1,  # 初始 1 行，后续按内容调整
+                           cursor="arrow")
+        # 自动隐藏的滚动条
+        sb = tk.Scrollbar(cmd_box, orient="vertical", command=cmd_text.yview,
+                          troughcolor=theme["cmd_bg"], borderwidth=0,
+                          activebackground=theme["cmd_border"])
+        cmd_text.configure(yscrollcommand=lambda lo, hi: (
+            sb.set(lo, hi), sb.pack_forget() if hi == "1.0" else sb.pack(side="right", fill="y")))
+        cmd_text.insert("1.0", cmd)
+        cmd_text.configure(state="disabled")  # 只读
+        cmd_text.pack(side="left", fill="x", expand=True)
+        # 按自动换行后的显示行数限高（最多 5 行，超出滚动）
+        # 需先布局让 Text 有宽度，count displaylines 才能算 word-wrap 行数
+        content.update_idletasks()
         try:
-            from tkinter import font as tkfont
-            f = tkfont.Font(font=cmd_font)
-            if f.measure(cmd) > avail:
-                ell = "…"
-                # 二分找最大前缀
-                lo, hi = 1, len(cmd)
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if f.measure(cmd[:mid] + ell) <= avail:
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                cmd_label.configure(text=cmd[:lo] + ell)
+            info = cmd_text.count("1.0", "end -1c", "displaylines")
+            lines = (info[0] if info else 1) or 1
+            cmd_text.configure(height=min(max(lines, 1), 5))
         except Exception:
-            pass
-        cmd_label.pack(fill="x", padx=12, pady=cmd_pady)
+            cmd_text.configure(height=1)
 
         actions = tk.Frame(content, bg=theme["card_bg"])
         actions.pack(fill="x", pady=(6, 0))
@@ -375,18 +380,21 @@ class BubbleController:
         deny_btn.grid(row=0, column=1, sticky="nsew")
         return deny_btn, allow_btn
 
-    def _build_elicitation(self, content, theme, req_id, tool_input, wrap):
-        """AskUserQuestion：逐问题展示选项，提交代答。返回 (back_btn, submit_btn)。
+    def _build_elicitation(self, content, theme, req_id, tool_input, wrap, relayout):
+        """AskUserQuestion：逐问题展示选项（含 Other 自定义输入），提交代答。
+        返回 (back_btn, next_btn)。
         回传格式（对照 Clawd buildElicitationUpdatedInput）：
-          updatedInput = {**tool_input, answers: {问题文本: 选项label, ...}}
+          updatedInput = {**tool_input, answers: {问题文本: 答案文本, ...}}
         通过 event.payload = ("elicitation", updated_input) 传给 handler。"""
         questions = tool_input.get("questions") or []
-        answers = {}           # 问题文本 -> 选中 label（单选）或 set（多选）
         multi_flags = {}       # 问题文本 -> bool
+        # answers[qtext] = {"selected": set|None, "other": bool, "other_text": str}
+        answers = {}
         for q in questions:
             qtext = q.get("question", "")
             multi_flags[qtext] = bool(q.get("multiSelect"))
-            answers[qtext] = set() if multi_flags[qtext] else None
+            answers[qtext] = {"selected": set() if multi_flags[qtext] else None,
+                              "other": False, "other_text": ""}
 
         # 问题展示区（每次只显示一个问题，用 pack_forget 切换）
         qhost = tk.Frame(content, bg=theme["card_bg"])
@@ -408,60 +416,166 @@ class BubbleController:
                             highlightbackground=theme["cmd_border"])
             card.pack(fill="x")
             state["cards"].append(card)
+            # card 有 highlightthickness=1 两侧各 1px，wraplength 留余量避免末字被切
+            qwrap = wrap - 8
             tk.Label(card, text=qheader.upper(), fg=theme["cmd_color"], bg=theme["cmd_bg"],
                      font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(10, 2))
             tk.Label(card, text=qtext, fg=theme["text_primary"], bg=theme["cmd_bg"],
                      font=("Segoe UI", 10), justify="left", anchor="w",
-                     wraplength=wrap).pack(fill="x", padx=12, pady=(0, 6))
+                     wraplength=qwrap).pack(fill="x", padx=12, pady=(0, 6))
             hint = "可多选" if multi else "请选择一项"
             tk.Label(card, text=hint, fg=theme["cmd_color"], bg=theme["cmd_bg"],
                      font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(0, 6))
 
-            for opt in (q.get("options") or []):
-                label = opt.get("label", "")
-                desc = opt.get("description", "")
-                row = tk.Frame(card, bg=theme["cmd_bg"], cursor="hand2")
-                row.pack(fill="x", padx=6, pady=2)
-                dot = tk.Label(row, text="○", fg=theme["cmd_color"], bg=theme["cmd_bg"],
-                               font=("Segoe UI", 11))
-                dot.pack(side="left", padx=(6, 4), pady=4)
-                txt = tk.Label(row, text=label, fg=theme["text_primary"], bg=theme["cmd_bg"],
-                               font=("Segoe UI", 10), anchor="w", cursor="hand2")
-                txt.pack(side="left", fill="x", pady=4)
+            # 收集本问题所有选项：(row_frame, dot, is_selected_fn, set_visual)
+            opts_ui = []
 
-                def toggle(opt_label=label, dot=dot, qtext=qtext, multi=multi, txt=txt):
+            def make_option(opt_label, is_other=False, desc=""):
+                # 选项卡片：圆角 frame + 1px 边框，选中时边框变橙
+                row = tk.Frame(card, bg=theme["card_bg"], cursor="hand2",
+                               highlightthickness=1,
+                               highlightbackground=theme["cmd_border"])
+                row.pack(fill="x", padx=6, pady=3)
+                # radio 圆点：未选空心○，选中实心● 橙色
+                dot = tk.Label(row, text="○", fg=theme["cmd_color"], bg=theme["card_bg"],
+                               font=("Segoe UI", 11))
+                dot.pack(side="left", padx=(10, 8), pady=8)
+                lbl_text = "自定义输入…" if is_other else opt_label
+                copy = tk.Frame(row, bg=theme["card_bg"])
+                copy.pack(side="left", fill="x", expand=True, pady=8)
+                txt = tk.Label(copy, text=lbl_text, fg=theme["text_primary"],
+                               bg=theme["card_bg"], font=("Segoe UI", 10), anchor="w",
+                               justify="left")
+                txt.pack(fill="x", anchor="w")
+                desc_lbl = None
+                if desc:
+                    desc_lbl = tk.Label(copy, text=desc, fg=theme["cmd_color"],
+                                        bg=theme["card_bg"], font=("Segoe UI", 8),
+                                        anchor="w", justify="left", wraplength=qwrap - 30)
+                    desc_lbl.pack(fill="x", anchor="w", pady=(2, 0))
+
+                def set_visual(on_):
+                    dot.configure(text="●" if on_ else "○",
+                                  fg=ALLOW_BG if on_ else theme["cmd_color"])
+                    row.configure(highlightbackground=ALLOW_BG if on_ else theme["cmd_border"])
+
+                opts_ui.append(set_visual)
+
+                def toggle():
+                    a = answers[qtext]
+                    multi = multi_flags[qtext]
                     if multi:
-                        sel = answers[qtext]
-                        if opt_label in sel:
-                            sel.discard(opt_label)
-                            dot.configure(text="○", fg=theme["cmd_color"])
+                        sel = a["selected"]
+                        if is_other:
+                            a["other"] = not a["other"]; on_ = a["other"]
                         else:
-                            sel.add(opt_label)
-                            dot.configure(text="●", fg=ALLOW_BG)
+                            if opt_label in sel:
+                                sel.discard(opt_label); on_ = False
+                            else:
+                                sel.add(opt_label); on_ = True
+                        set_visual(on_)
                     else:
-                        # 单选：清除同问题其他点
-                        for c2 in state["cards"]:
-                            for child in c2.winfo_children():
-                                if isinstance(child, tk.Frame):
-                                    for gc in child.winfo_children():
-                                        if isinstance(gc, tk.Label) and gc.cget("text") in ("○", "●"):
-                                            gc.configure(text="○", fg=theme["cmd_color"])
-                        dot.configure(text="●", fg=ALLOW_BG)
-                        answers[qtext] = opt_label
+                        # 单选：清除本问题所有视觉
+                        for sv in opts_ui:
+                            sv(False)
+                        set_visual(True)
+                        if is_other:
+                            a["other"] = True; a["selected"] = None
+                        else:
+                            a["other"] = False; a["selected"] = opt_label
+                    sync_other_entry()
                     update_buttons()
-                for w in (row, dot, txt):
+
+                widgets = [row, dot, txt, copy] + ([desc_lbl] if desc_lbl else [])
+                for w in widgets:
                     w.bind("<Button-1>", lambda e, fn=toggle: fn())
+
+            for opt in (q.get("options") or []):
+                make_option(opt.get("label", ""), desc=opt.get("description", ""))
+            # Other 自定义输入（CC 终端会自动提供，options 不含，客户端注入）
+            make_option(None, is_other=True)
+
+            # Other 输入框：Canvas 圆角灰边框容器 + 嵌入 Entry（聚焦边框变橙）
+            entry_host = tk.Frame(card, bg=theme["card_bg"])
+            entry_canvas = tk.Canvas(entry_host, bg=theme["card_bg"], bd=0,
+                                     highlightthickness=0, height=30)
+            entry_canvas.pack(fill="x")
+            entry_inner = tk.Entry(entry_canvas, bg=theme["card_bg"],
+                                   fg=theme["text_primary"], insertbackground=ALLOW_BG,
+                                   relief="flat", bd=0, highlightthickness=0,
+                                   font=("Segoe UI", 10))
+            entry_win = entry_canvas.create_window(10, 15, window=entry_inner, anchor="w")
+
+            def draw_entry_border(focused=False):
+                entry_canvas.delete("border")
+                w = max(entry_canvas.winfo_width(), 1)
+                color = ALLOW_BG if focused else theme["cmd_border"]
+                self._round_rect(entry_canvas, 1, 1, w - 1, 29, 6,
+                                 fill=theme["card_bg"], outline=color, width=1,
+                                 tags="border")
+                entry_canvas.tag_lower("border")
+
+            def on_entry_configure(_=None):
+                entry_canvas.itemconfigure(entry_win, width=max(entry_canvas.winfo_width() - 20, 1))
+                draw_entry_border(entry_inner is card.focus_get())
+            entry_canvas.bind("<Configure>", on_entry_configure)
+            entry_inner.bind("<FocusIn>", lambda e: draw_entry_border(True))
+            entry_inner.bind("<FocusOut>", lambda e: draw_entry_border(False))
+
+            other_entry = entry_inner  # 兼容 sync_other_entry / on_other_input
+
+            def sync_other_entry():
+                a = answers[qtext]
+                if a["other"]:
+                    entry_host.pack(fill="x", padx=12, pady=(4, 8))
+                    entry_inner.delete(0, "end")
+                    entry_inner.insert(0, a["other_text"])
+                    card.update_idletasks()
+                    draw_entry_border(False)
+                    # 自动聚焦输入框
+                    try:
+                        entry_inner.focus_set()
+                    except Exception:
+                        pass
+                else:
+                    entry_host.pack_forget()
+                relayout()
+
+            def on_other_input(_=None):
+                answers[qtext]["other_text"] = other_entry.get()
+                update_buttons()
+            other_entry.bind("<KeyRelease>", on_other_input)
+
+            # 恢复已选状态（切回此问题时回显）
+            a0 = answers[qtext]
+            preset_opts = q.get("options") or []
+            if a0["other"]:
+                opts_ui[-1](True)  # Other 是最后一个
+                sync_other_entry()
+            elif a0["selected"]:
+                sel = a0["selected"]
+                sel_set = sel if isinstance(sel, set) else {sel}
+                for idx, opt in enumerate(preset_opts):
+                    if opt.get("label", "") in sel_set:
+                        opts_ui[idx](True)
 
             progress.configure(text=f"问题 {i+1} / {len(questions)}")
             update_buttons()
+            relayout()  # 切题后内容高度变了，重新测量自适应
 
         def answer_text(qtext):
             a = answers.get(qtext)
-            if a is None:
+            if not a:
                 return ""
-            if isinstance(a, set):
-                return ", ".join(sorted(a)) if a else ""
-            return a
+            parts = []
+            if a["selected"]:
+                parts.extend(sorted(a["selected"]) if isinstance(a["selected"], set)
+                             else [a["selected"]])
+            if a["other"]:
+                t = a["other_text"].strip()
+                if t:
+                    parts.append(t)
+            return ", ".join(parts)
 
         def all_answered():
             for q in questions:
